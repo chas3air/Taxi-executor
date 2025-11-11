@@ -1,0 +1,335 @@
+services:
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8081:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    depends_on:
+      - kafka
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.2
+    hostname: kafka
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_BROKER_ID: 1
+      KAFKA_LOG4J_LOGGERS: "kafka.controller=INFO,kafka.producer.async.DefaultEventHandler=INFO,state.change.logger=INFO"
+      KAFKA_AUTHORIZER_CLASS_NAME: kafka.security.authorizer.AclAuthorizer
+      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    depends_on:
+      - zookeeper
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "bash", "-c", "echo > /dev/tcp/localhost/9092" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.2
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_SERVER_ID: 1
+      ZOOKEEPER_SERVERS: zookeeper:2888:3888
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  gatewayservice:
+    image: chas3air/taxi_apigateway:latest
+    container_name: gateway_service
+    ports:
+      - "80:80"
+    networks:
+      - app-network
+
+  user_service:
+    image: chas3air/taxi_userservice:latest
+    container_name: user_service
+    ports:
+      - "8082:8080"
+      - "50052:50051"
+      - "9090:9090"
+    networks:
+      - app-network
+
+  user_psql_outbox:
+    image: postgres:latest
+    container_name: user_outbox
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123
+      POSTGRES_DB: taxi
+    ports:
+      - "5435:5432"
+    volumes:
+      - user_pgdata_outbox:/var/lib/postgresql
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  usersmongo:
+    image: mongo:latest
+    ports:
+      - "27018:27017"
+    container_name: userservice_mongo
+    volumes:
+      - userservice_mongo_volume:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: userservice
+      MONGO_INITDB_COLLECTION: users
+    healthcheck:
+      test: [ "CMD-SHELL", "nc -z localhost 27017" ]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+
+  auth_service:
+    image: chas3air/taxi_authservice:latest
+    container_name: auth_service
+    ports:
+      - "8083:8080"
+      - "50053:50051"
+      - "9091:9090"
+    depends_on:
+      - redis
+    networks:
+      - app-network
+
+  auth_psql_outbox:
+    image: postgres:latest
+    container_name: auth_outbox
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123
+      POSTGRES_DB: taxi
+    ports:
+      - "5436:5432"
+    volumes:
+      - auth_pgdata_outbox:/var/lib/postgresql
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  driverservice:
+    image: chas3air/taxi-driverservice:latest
+    container_name: driver_service
+    ports:
+      - "8084:8080"
+      - "50054:50051"
+      - "9097:9090"
+    networks:
+      - app-network
+
+  driver_psql_outbox:
+    image: postgres:latest
+    container_name: driver_outbox
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123
+      POSTGRES_DB: taxi
+    ports:
+      - "5434:5432"
+    volumes:
+      - driver_pgdata_outbox:/var/lib/postgresql
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  drivermongo:
+    image: mongo:latest
+    container_name: mongo # drivermongo
+    ports:
+      - "27019:27017"
+    volumes:
+      - mongo_volume:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: taxi
+    healthcheck:
+      test: [ "CMD-SHELL", "nc -z localhost 27017" ]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  orderservice:
+    image: chas3air/taxi_orderservice:latest
+    container_name: order_service
+    ports:
+      - "8085:8080"
+      - "50055:50051"
+      - "9093:9090"
+    depends_on:
+      - kafka
+      - order_psql_outbox
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  elasticsearch_order:
+    image: elastic/elasticsearch:8.15.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - bootstrap.memory_lock=true
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:9200 || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+
+  order_psql_outbox:
+    image: postgres:latest
+    container_name: order_outbox
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123
+      POSTGRES_DB: taxi
+    ports:
+      - "5437:5432"
+    volumes:
+      - order_pgdata_outbox:/var/lib/postgresql
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  wallet_service:
+    image: chas3air/taxi_walletservice:latest
+    container_name: wallet_service
+    ports:
+      - "8086:8080"
+      - "50056:50051"
+      - "9094:9090"
+    depends_on:
+      - kafka
+      - psql_wallet_service
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  psql_wallet_service:
+    image: postgres:latest
+    container_name: walletpsql
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123
+      POSTGRES_DB: wallet_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata_wallet:/var/lib/postgresql
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9095:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - app-network
+    restart: unless-stopped
+
+networks:
+  app-network:
+
+
+volumes:
+  userservice_mongo_volume:
+  user_pgdata_outbox:
+  auth_pgdata_outbox:
+  driver_pgdata_outbox:
+  order_pgdata_outbox:
+  mongo_volume:
+  esdata:
+  pgdata_wallet:
+
+  grafana_data:
